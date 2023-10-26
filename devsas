@@ -1,1 +1,46 @@
+%macro encode_and_test_connection(userid, password, pwfile, dbpath);
+
+    /* Create a filename for a temporary store of encoded password */
+    filename pwtemp temp;
+
+    /* Use PROC PWENCODE to encode the password and store it in the temporary file */
+    proc pwencode in="&password" out=pwtemp;
+    run;
+
+    /* Read the encoded password and write to the pwfile along with userid */
+    data _null_;
+        infile pwtemp truncover;
+        input encoded_password $char50.;
+        file "&pwfile" mod; /* Use mod option to append to the file if it exists */
+        put "&userid" @25 encoded_password $50.;
+    run;
+
+    /* Clear the temporary filename */
+    filename pwtemp clear;
+
+    /* Attempt to assign a library using the encoded password */
+    libname testlib "&dbpath" user=&userid pw=encoded_password;
+
+    /* Check if the library assignment was successful */
+    %if %sysfunc(libref(testlib)) = 0 %then %do;
+        %put Connection for &userid was successful!;
+    %end;
+    %else %do;
+        %put Connection for &userid failed!;
+    %end;
+
+    /* Clear the library reference */
+    libname testlib clear;
+
+%mend;
+
+/* Specify the path to the output file */
+%let outfile = /path/to/pwfile.txt;
+
+/* Use the macro to encode, write, and test each userid-password pair with the respective database */
+%encode_and_test_connection(user1, password1, &outfile, /path/to/db1);
+%encode_and_test_connection(user2, password2, &outfile, /path/to/db2);
+%encode_and_test_connection(user3, password3, &outfile, /path/to/db3);
+%encode_and_test_connection(user4, password4, &outfile, /path/to/db4);
+%encode_and_test_connection(user5, password5, &outfile, /path/to/db5);
 
