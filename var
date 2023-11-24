@@ -1,0 +1,120 @@
+data my_dataset;
+    input Period $ Metric1 Metric2;
+    datalines;
+2023-01 100 150
+2023-02 110 155
+2023-03 95 145
+2023-04 120 160
+2023-05 105 150
+2023-06 115 158
+2023-07 130 165
+2023-08 90 140
+2023-09 125 162
+2023-10 110 155
+;
+run;
+
+
+%macro check_value_and_update(data=, new_period=, new_values=, email_recipient=);
+
+    /* Add new values to the dataset */
+    data &data;
+        set &data;
+        length new_metric $100;
+        new_metric = "&new_values";
+        if _N_ = 1 then do;
+            Period = "&new_period";
+            array metrics[*] _numeric_;
+            do i = 1 to dim(metrics);
+                metrics[i] = input(scan(new_metric, i, ','), ?? best.);
+            end;
+            output;
+        end;
+        drop i new_metric;
+    run;
+
+    /* Determine the number of metric columns */
+    proc contents data=&data out=contents(keep=name type) noprint;
+    run;
+
+    /* Loop through each metric column */
+    data _null_;
+        set contents;
+        if type = 1 and upcase(name) ne 'PERIOD' then do;
+            call execute('%process_metric(data=' || strip(&data) || ', metric=' || strip(name) || ');');
+        end;
+    run;
+
+    /* Export to Excel */
+    proc export data=&data outfile="path_to_excel_file.xlsx" dbms=xlsx replace;
+    run;
+
+    /* Prepare email body content with summary for each metric */
+    %let email_body=;
+    %do k = 1 %to %sysfunc(countw(&new_values));
+
+        /* Retrieve mean, std, and new value for current metric */
+        %let new_value = %scan(&new_values, &k);
+        proc sql noprint;
+            select mean, std into :mean, :std
+            from stats&k;
+        quit;
+
+        /* Determine sigma level and validity of new value */
+        %let sigma_status=Not Statistically Normal and Valid;
+        %let sigma_level=;
+        %let lower_limit_3 = %sysevalf(&mean - 3*&std);
+        %let upper_limit_3 = %sysevalf(&mean + 3*&std);
+        %if &new_value >= &lower_limit_3 and &new_value <= &upper_limit_3 %then %do;
+            %let sigma_status=Statistically Normal and Valid;
+            /* Additional logic to determine exact sigma level (-1, -2, -3, +1, +2, +3) */
+        %end;
+
+        /* Append to email body */
+        %let email_body=&email_body %str(Period: &new_period, Metric&k: &new_value, ) 
+                         %str(Sigma Status: &sigma_status, Mean: &mean, Thresholds: -3 Sigma: &lower_limit_3, +3 Sigma: &upper_limit_3\n);
+
+    %end;
+
+    /* Send email with summary and Excel attachment */
+    filename mymail email "&email_recipient"
+             subject="Metric Analysis Report"
+             attach="path_to_excel_file.xlsx";
+    data _null_;
+        file mymail;
+        put "&email_body";
+    run;
+
+%mend check_value_and_update;
+
+%macro process_metric(data=, metric=);
+    /* Calculate mean and standard deviation for the current metric */
+    proc means data=&data noprint;
+        var &metric;
+        output out=stats mean=mean std=std;
+    run;
+
+    /* Update the dataset with sigma values for the current metric */
+    data &data;
+        set &data;
+        if _N_ = 1 then set stats;
+        length sigma_level_$metric $20.;
+
+        /* Determine sigma level */
+        if &metric < mean then do;
+            if &metric > (mean - std) then sigma_level_$metric = "-1 Sigma";
+            else if &metric > (mean - 2*std) then sigma_level_$metric = "-2 Sigma";
+            else if &metric > (mean - 3*std) then sigma_level_$metric = "-3 Sigma";
+            else sigma_level_$metric = "<-3 Sigma";
+        end;
+        else do;
+            if &metric <= (mean + std) then sigma_level_$metric = "+1 Sigma";
+            else if &metric <= (mean + 2*std) then sigma_level_$metric = "+2 Sigma";
+            else if &metric <= (mean + 3*std) then sigma_level_$metric = "+3 Sigma";
+            else sigma_level_$metric = ">+3 Sigma";
+        end;
+    run;
+%mend process_metric;
+
+/* Example Usage */
+%check_value_and_update(data=my_dataset, new_period=2023-11, new_values=118,160, email_recipient='example@email.com');
