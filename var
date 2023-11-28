@@ -1,120 +1,69 @@
-data my_dataset;
-    input Period $ Metric1 Metric2;
-    datalines;
-2023-01 100 150
-2023-02 110 155
-2023-03 95 145
-2023-04 120 160
-2023-05 105 150
-2023-06 115 158
-2023-07 130 165
-2023-08 90 140
-2023-09 125 162
-2023-10 110 155
-;
-run;
+import re
+import pandas as pd
+from teradataml import create_context, remove_context, execute
+from sqlalchemy.exc import DatabaseError
 
+# User ID
+user_id = "your_username"
 
-%macro check_value_and_update(data=, new_period=, new_values=, email_recipient=);
+# Connect to Teradata
+create_context(host="your_host", username=user_id, password="your_password")
 
-    /* Add new values to the dataset */
-    data &data;
-        set &data;
-        length new_metric $100;
-        new_metric = "&new_values";
-        if _N_ = 1 then do;
-            Period = "&new_period";
-            array metrics[*] _numeric_;
-            do i = 1 to dim(metrics);
-                metrics[i] = input(scan(new_metric, i, ','), ?? best.);
-            end;
-            output;
-        end;
-        drop i new_metric;
-    run;
+# Read your SQL script and split by lines
+with open("your_sql_script.sql", "r") as file:
+    sql_script_lines = file.readlines()
 
-    /* Determine the number of metric columns */
-    proc contents data=&data out=contents(keep=name type) noprint;
-    run;
+# Regex for table references and comments
+pattern = re.compile(r'from\s+([\w.]+(?:_\?\w+)?\b)', re.IGNORECASE)
+comment_pattern = re.compile(r'--.*$')
 
-    /* Loop through each metric column */
-    data _null_;
-        set contents;
-        if type = 1 and upcase(name) ne 'PERIOD' then do;
-            call execute('%process_metric(data=' || strip(&data) || ', metric=' || strip(name) || ');');
-        end;
-    run;
+# Function to remove in-line comments
+def remove_inline_comments(line):
+    return comment_pattern.sub('', line)
 
-    /* Export to Excel */
-    proc export data=&data outfile="path_to_excel_file.xlsx" dbms=xlsx replace;
-    run;
+# Process the SQL script
+placeholders = set()
+table_references = {}
 
-    /* Prepare email body content with summary for each metric */
-    %let email_body=;
-    %do k = 1 %to %sysfunc(countw(&new_values));
+for line_number, line in enumerate(sql_script_lines, 1):
+    if line.strip().startswith('--'):  # Skip full line comments
+        continue
+    line = remove_inline_comments(line)  # Remove in-line comments
+    for match in pattern.finditer(line):
+        table_reference = match.group(1)
+        placeholders.update(re.findall(r'_(\?\w+)', table_reference))
+        table_references.setdefault(table_reference, []).append(line_number)
 
-        /* Retrieve mean, std, and new value for current metric */
-        %let new_value = %scan(&new_values, &k);
-        proc sql noprint;
-            select mean, std into :mean, :std
-            from stats&k;
-        quit;
+# Prompt user for each placeholder value
+placeholder_values = {placeholder: input(f"Enter the value for {placeholder}: ") for placeholder in placeholders}
 
-        /* Determine sigma level and validity of new value */
-        %let sigma_status=Not Statistically Normal and Valid;
-        %let sigma_level=;
-        %let lower_limit_3 = %sysevalf(&mean - 3*&std);
-        %let upper_limit_3 = %sysevalf(&mean + 3*&std);
-        %if &new_value >= &lower_limit_3 and &new_value <= &upper_limit_3 %then %do;
-            %let sigma_status=Statistically Normal and Valid;
-            /* Additional logic to determine exact sigma level (-1, -2, -3, +1, +2, +3) */
-        %end;
+results = []
 
-        /* Append to email body */
-        %let email_body=&email_body %str(Period: &new_period, Metric&k: &new_value, ) 
-                         %str(Sigma Status: &sigma_status, Mean: &mean, Thresholds: -3 Sigma: &lower_limit_3, +3 Sigma: &upper_limit_3\n);
+# Check access for each table
+for table, line_numbers in table_references.items():
+    table_with_replaced_placeholders = replace_placeholders(table)
+    database, table_name = table_with_replaced_placeholders.split('.')
+    access_granted = True
+    try:
+        execute(f"SELECT TOP 1 * FROM {table_with_replaced_placeholders}")
+    except DatabaseError as e:
+        if "access" in str(e).lower():  # Check if the error message indicates an access issue
+            access_granted = False
+    for line_number in line_numbers:
+        results.append({
+            "UserID": user_id,
+            "Row number": line_number,
+            "Database": database,
+            "TableName": table_name,
+            "Access": "Yes" if access_granted else "No"
+        })
 
-    %end;
+# Clean up context
+remove_context()
 
-    /* Send email with summary and Excel attachment */
-    filename mymail email "&email_recipient"
-             subject="Metric Analysis Report"
-             attach="path_to_excel_file.xlsx";
-    data _null_;
-        file mymail;
-        put "&email_body";
-    run;
+# Output to Excel
+df = pd.DataFrame(results)
+excel_filename = "access_report.xlsx"
+df.to_excel(excel_filename, index=False)
 
-%mend check_value_and_update;
-
-%macro process_metric(data=, metric=);
-    /* Calculate mean and standard deviation for the current metric */
-    proc means data=&data noprint;
-        var &metric;
-        output out=stats mean=mean std=std;
-    run;
-
-    /* Update the dataset with sigma values for the current metric */
-    data &data;
-        set &data;
-        if _N_ = 1 then set stats;
-        length sigma_level_$metric $20.;
-
-        /* Determine sigma level */
-        if &metric < mean then do;
-            if &metric > (mean - std) then sigma_level_$metric = "-1 Sigma";
-            else if &metric > (mean - 2*std) then sigma_level_$metric = "-2 Sigma";
-            else if &metric > (mean - 3*std) then sigma_level_$metric = "-3 Sigma";
-            else sigma_level_$metric = "<-3 Sigma";
-        end;
-        else do;
-            if &metric <= (mean + std) then sigma_level_$metric = "+1 Sigma";
-            else if &metric <= (mean + 2*std) then sigma_level_$metric = "+2 Sigma";
-            else if &metric <= (mean + 3*std) then sigma_level_$metric = "+3 Sigma";
-            else sigma_level_$metric = ">+3 Sigma";
-        end;
-    run;
-%mend process_metric;
-
-/* Example Usage */
-%check_value_and_update(data=my_dataset, new_period=2023-11, new_values=118,160, email_recipient='example@email.com');
+print(f"Access report saved to {excel_filename}")
