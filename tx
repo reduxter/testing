@@ -1,0 +1,142 @@
+/* Define your SAS datasets */
+%let dataset1 = YourDataset1;
+%let dataset2 = YourDataset2;
+%let dataset3 = YourDataset3;
+%let dataset4 = YourDataset4;
+
+%let email_subject = "Your Email Subject";
+
+/* Define specific messages for each dataset */
+%let text_YourDataset1 = "<b>This is specific text for YourDataset1.</b>";
+%let text_YourDataset2 = "<b>This is specific text for YourDataset2.</b>";
+%let text_YourDataset3 = "<b>This is specific text for YourDataset3.</b>";
+%let text_YourDataset4 = "<b>This is specific text for YourDataset4.</b>";
+
+/* Define network drive path */
+%let network_drive_path = \\network\drive\path;
+
+/* Macro to check for DIFF_ columns and store results in macro variables */
+%macro check_diff_columns(dataset, has_diff, diff_col);
+    %global &has_diff &diff_col;
+
+    /* Initialize macro variables */
+    %let &has_diff = 0;
+    %let &diff_col = .;
+
+    proc sql noprint;
+        select count(*), min(name) into :&has_diff, :&diff_col
+        from dictionary.columns
+        where libname='WORK' and memname=upcase("&dataset") and name like 'DIFF_%';
+    quit;
+%mend;
+
+/* Clear macro variables to avoid redefinition issues */
+%symdel has_diff_YourDataset1 diff_col_YourDataset1 has_diff_YourDataset2 diff_col_YourDataset2 
+        has_diff_YourDataset3 diff_col_YourDataset3 has_diff_YourDataset4 diff_col_YourDataset4 / nowarn;
+
+/* Check for DIFF_ columns for each dataset */
+%check_diff_columns(&dataset1, has_diff_YourDataset1, diff_col_YourDataset1)
+%check_diff_columns(&dataset2, has_diff_YourDataset2, diff_col_YourDataset2)
+%check_diff_columns(&dataset3, has_diff_YourDataset3, diff_col_YourDataset3)
+%check_diff_columns(&dataset4, has_diff_YourDataset4, diff_col_YourDataset4)
+
+/* Generate HTML email body */
+filename mymail email
+    to="recipient@example.com"
+    subject="&email_subject"
+    type="text/html";
+
+data _null_;
+    file mymail;
+
+    put "<html>";
+    put "<body>";
+
+    /* Start email body */
+    put "<p>Hello,</p>";
+    put "<br>"; /* blank line */
+    put "<p>This is the result of the comparison:</p>";
+
+    /* Dataset 1 */
+    put "<p>&text_YourDataset1</p>";
+    put "<p>Dataset YourDataset1:</p>";
+    %if &has_diff_YourDataset1 > 0 %then %do;
+        put "<p>YourDataset1 has columns starting with 'DIFF_'. Here are the columns:</p>";
+        put "<ul><li>&diff_col_YourDataset1</li></ul>";
+    %end;
+    %else %do;
+        put "<p>YourDataset1 does not have columns starting with 'DIFF_'.</p>";
+    %end;
+    put "<p>Here is the dataset:</p>";
+    proc printto print='<table border="1" cellpadding="2" cellspacing="0" width="100%">', new;
+    run;
+    proc print data=&dataset1 noobs; run;
+    proc printto;
+    run;
+    put "<br>";
+
+    /* Dataset 2 */
+    put "<p>&text_YourDataset2</p>";
+    put "<p>Dataset YourDataset2:</p>";
+    %if &has_diff_YourDataset2 > 0 %then %do;
+        put "<p>YourDataset2 has columns starting with 'DIFF_'. Here are the columns:</p>";
+        put "<ul><li>&diff_col_YourDataset2</li></ul>";
+    %end;
+    %else %do;
+        put "<p>YourDataset2 does not have columns starting with 'DIFF_'.</p>";
+    %end;
+    put "<p>Here is the dataset:</p>";
+    proc printto print='<table border="1" cellpadding="2" cellspacing="0" width="100%">', new;
+    run;
+    proc print data=&dataset2 noobs; run;
+    proc printto;
+    run;
+    put "<br>";
+
+    /* Dataset 3 */
+    put "<p>&text_YourDataset3</p>";
+    put "<p>Dataset YourDataset3:</p>";
+    %if &has_diff_YourDataset3 > 0 %then %do;
+        put "<p>YourDataset3 has columns starting with 'DIFF_'. Here are the columns:</p>";
+        put "<ul><li>&diff_col_YourDataset3</li></ul>";
+    %end;
+    %else %do;
+        put "<p>YourDataset3 does not have columns starting with 'DIFF_'.</p>";
+    %end;
+    put "<p>Here is the dataset:</p>";
+    proc printto print='<table border="1" cellpadding="2" cellspacing="0" width="100%">', new;
+    run;
+    proc print data=&dataset3 noobs; run;
+    proc printto;
+    run;
+    put "<br>";
+
+    /* Dataset 4 */
+    put "<p>&text_YourDataset4</p>";
+    put "<p>Dataset YourDataset4:</p>";
+    %if &has_diff_YourDataset4 > 0 %then %do;
+        put "<p>YourDataset4 has columns starting with 'DIFF_'. Here are the columns:</p>";
+        put "<ul><li>&diff_col_YourDataset4</li></ul>";
+    %end;
+    %else %do;
+        put "<p>YourDataset4 does not have columns starting with 'DIFF_'.</p>";
+    %end;
+    put "<p>Here is the dataset:</p>";
+    proc printto print='<table border="1" cellpadding="2" cellspacing="0" width="100%">', new;
+    run;
+    proc print data=&dataset4 noobs; run;
+    proc printto;
+    run;
+    put "<br>";
+
+    /* Additional information */
+    put "<p>Here are two more datasets:</p>";
+
+    /* Network Drive Path */
+    put "<p>The results are also saved on an <a href='file:////&network_drive_path'>Excel sheet on the network drive</a>.</p>";
+    put "<p>Please review.</p>";
+    put "<p>Thank you!</p>";
+
+    put "</body>";
+    put "</html>";
+run;
