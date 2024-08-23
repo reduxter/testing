@@ -1,0 +1,76 @@
+/* Step 1: Delete all rows from the backup table */
+proc sql;
+    connect to teradata (user=&userid password=&password mode=teradata);
+    execute (
+        DELETE FROM backup_table;
+    ) by teradata;
+    disconnect from teradata;
+quit;
+
+/* Step 2: Insert all rows from the actual table into the backup table */
+proc sql;
+    connect to teradata (user=&userid password=&password mode=teradata);
+    execute (
+        INSERT INTO backup_table
+        SELECT * FROM actual_table;
+    ) by teradata;
+    disconnect from teradata;
+quit;
+
+/* Step 3: Retrieve counts and max(month) values from both tables */
+proc sql;
+    connect to teradata (user=&userid password=&password mode=teradata);
+    
+    /* Retrieve counts and max(month) from actual_table */
+    select count(*) as actual_table_count, max(month) as actual_table_max_month
+    into :actual_count, :actual_max_month
+    from actual_table;
+    
+    /* Retrieve counts and max(month) from backup_table */
+    select count(*) as backup_table_count, max(month) as backup_table_max_month
+    into :backup_count, :backup_max_month
+    from backup_table;
+
+    disconnect from teradata;
+quit;
+
+/* Step 4: Check if the backup was successful */
+%macro check_backup;
+    %if &actual_count = &backup_count and &actual_max_month = &backup_max_month %then %do;
+        %let backup_status = Backup was successful.;
+    %end;
+    %else %do;
+        %let backup_status = Backup failed. Counts or maximum month values do not match.;
+    %end;
+%mend;
+
+%check_backup;
+
+/* Step 5: Email the output in HTML format */
+filename mymail email
+    to='recipient@example.com'
+    subject='Backup Report'
+    type='text/html';
+
+data _null_;
+    file mymail;
+    put '<html>';
+    put '<head>';
+    put '<title>Backup Report</title>';
+    put '</head>';
+    put '<body>';
+    put '<h2>Backup Report</h2>';
+    put '<p><strong>Counts and Max Month Before Insert:</strong></p>';
+    put '<ul>';
+    put '<li>Actual Table Count: ' &actual_count '</li>';
+    put '<li>Actual Table Max Month: ' &actual_max_month '</li>';
+    put '<li>Backup Table Count: ' &backup_count '</li>';
+    put '<li>Backup Table Max Month: ' &backup_max_month '</li>';
+    put '</ul>';
+    put '<p><strong>Backup Status:</strong> ' &backup_status '</p>';
+    put '</body>';
+    put '</html>';
+run;
+
+/* Close the email */
+filename mymail clear;
